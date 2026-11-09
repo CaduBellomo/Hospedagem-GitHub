@@ -1,0 +1,78 @@
+# Autor e responsável: Carlos Bellomo (CaduBellomo)
+name: CI e CD do site
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: Validar e empacotar
+    runs-on: ubuntu-latest
+    steps:
+      - name: Obter código
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Configurar Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Validar HTML e CSS
+        shell: python
+        run: |
+          from html.parser import HTMLParser
+          from pathlib import Path
+
+          class Pagina(HTMLParser):
+              tem_h1 = False
+              estilos = []
+
+              def handle_starttag(self, tag, attrs):
+                  attrs = dict(attrs)
+                  if tag == "h1":
+                      self.tem_h1 = True
+                  if tag == "link" and attrs.get("rel") == "stylesheet":
+                      self.estilos.append(attrs.get("href"))
+
+          html = Path("index.html").read_text(encoding="utf-8")
+          pagina = Pagina()
+          pagina.feed(html)
+          pagina.close()
+          if not pagina.tem_h1 or "style.css" not in pagina.estilos:
+              raise SystemExit("HTML sem h1 ou sem referência a style.css.")
+          css = Path("style.css")
+          if not css.is_file() or not css.read_text(encoding="utf-8").strip():
+              raise SystemExit("style.css ausente ou vazio.")
+          print("HTML com h1 e vínculo para style.css; CSS presente e não vazio.")
+      - name: Preparar versão
+        if: github.event_name == 'push'
+        run: |
+          mkdir -p _site
+          cp index.html style.css _site/
+          printf '%s\n' "$GITHUB_SHA" > _site/versao.txt
+      - name: Enviar artefato
+        if: github.event_name == 'push'
+        uses: actions/upload-pages-artifact@v4
+
+  deploy:
+    name: Publicar no GitHub Pages
+    needs: ci
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    concurrency: github-pages
+    environment:
+      name: github-pages
+      url: ${{ steps.pages.outputs.page_url }}
+    steps:
+      - name: Publicar artefato validado
+        id: pages
+        uses: actions/deploy-pages@v4
